@@ -3,7 +3,18 @@ import unittest
 import log
 
 class TestCase(unittest.TestCase):
-    def test(self):
+    def test_get(self):
+        root = log.Log()
+        red = root.get('red')
+        assert red is root.get('red')
+        blue = red.get('blue')
+        assert root.get('red.blue') is blue
+        assert root.get(' red.blue') is blue
+        assert root.get(' red. blue ') is blue
+        assert blue.parent() is red
+        assert red.parent() is root
+
+    def test_basic(self):
         tree = log.Log()
         red = tree.get('red')
     

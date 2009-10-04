@@ -6,7 +6,16 @@ from __future__ import with_statement
 import datetime
 import sys
 import threading
+import traceback
 import weakref
+
+try:
+    import json
+except ImportError:
+    try:
+        import simplejson as json
+    except ImportError:
+        json = None
 
 class Level(int):
     """Log levels"""
@@ -26,6 +35,15 @@ class Level(int):
             WARNING: u'WARNING',
     }
 
+def obj_type_to_name(object):
+    """Convert an object to a logger name"""
+    obj_type = object if isinstance(object, type) else type(object)
+    mod = obj_type.__module__
+    if mod != '__main__':
+        return mod + '.' + obj_type.__name__
+    else:
+        return obj_type.__name__
+
 class Event(object):
     """A log event"""
     def __init__(self, logger=None, level=Level.NOTSET, message=u'', args=(), kwargs=None, exc_info=None, time=None):
@@ -36,11 +54,11 @@ class Event(object):
         self.args = args
         self.kwargs = kwargs if kwargs is not None else {}
         self.time = time if time is not None else datetime.datetime.now()
- 
+
     def __repr__(self):
         return u"%s(logger=%r, level=%r, message=%r, args=%r, kwargs=%r, time=%r)" % \
                 (self.__class__.__name__, self.logger, self.level, self.message, self.args, self.kwargs, self.time)
-    
+
 class Log(object):
     """A logger is something which logs messages and events.
 
@@ -69,6 +87,9 @@ class Log(object):
                 name = name.decode('latin-1')
         self.name = name
 
+    def __repr__(self):
+        return u"<log.Log(name=%r, level=%r) at 0x%X>" % (self.path(), self.level, id(self))
+
     def parent(self):
         """Get the parent logger"""
         if self._parent is not None:
@@ -82,7 +103,7 @@ class Log(object):
             return self.level
         p = self.parent()
         if p is not None:
-            return p.effective_level()
+            return p.effective_level
         else:
             return self.level
 
@@ -100,9 +121,13 @@ class Log(object):
             names.append(ancestor.name)
         return u'.'.join(reversed(filter(None, names)))
 
-    def get(self, name=None):
-        if not name:
+    def get(self, name_or_obj=None):
+        if name_or_obj is None or name_or_obj == '':
             return self
+        if not isinstance(name_or_obj, basestring):
+            name = obj_type_to_name(name_or_obj)
+        else:
+            name = name_or_obj
 
         rest = name.strip()
         head = ''
@@ -128,7 +153,7 @@ class Log(object):
 
     def log(self, level, message, *args, **kwargs):
         """Log a message
-        
+
         Arguments
         level -- int, a log level see WARN, CRITICAL, ...
 
@@ -143,6 +168,19 @@ class Log(object):
     def error(self, message, *args, **kwargs):
         """Log a warning message"""
         self.log(Level.ERROR, message, *args, **kwargs)
+
+    def exception(self, message, *args, **kwargs):
+        """Log a warning message"""
+        try:
+            exc_info = kwargs.pop('exc_info')
+        except KeyError:
+            exc_info = sys.exc_info()
+
+        try:
+            level = kwargs.pop('level')
+        except KeyError:
+            level = Level.ERROR
+        self.log(level, message, exc_info=exc_info, *args, **kwargs)
 
     def warning(self, message, *args, **kwargs):
         """Log a warning message"""
@@ -160,13 +198,9 @@ class Log(object):
         """Override this to do something when events are skipped."""
         pass
 
-    def skip(self, event):
-        """Override this to do something when events are skipped."""
-        pass
-
     def event(self, event):
         """Handle a log event"""
-        if self.effective_level() > event.level:
+        if self.effective_level > event.level:
             self.skip(event)
             return
 
@@ -185,48 +219,45 @@ class Log(object):
     def basic_config(self,
             layout_fields=None,
             layout_sep="\t",
-            level=Level.NOTSET,
+            level=Level.ERROR,
             stream=sys.stderr,
             filename=None,
             file_mode='a'):
         """Setup basic logging.
-        
+
         Note: this will reset the configuration on this logger, so this
         is safe to call repeatedly, but you may inadvertently reset settings made elsewhere.
         """
         if filename is not None:
             stream = open(filename, file_mode)
 
-        handler = StreamSink(stream=stream, fields=layout_fields, sep=layout_sep)
-         
+        handler = StreamSink(stream=stream, layout=TextLayout(fields=layout_fields, sep=layout_sep))
+
         self.handlers = [handler]
         self.level = level
 
-    def trace_it(self, message='tracing', level=Level.TRACE, before=True, after=True):
+    def trace_it(self, function):
         """Trace a function
-        
+
         Example usage:
 
         dogs/spaniel.py:
 
         _log = log.get("dogs.spaniel")
-        @_log.traceit("Got a bark")
+        @_log.trace_it
         def bark():
             ....
-
         """
-        def _trace_decorator(function):
-            def new_function(*args, **kwargs):
-                if before:
-                    self.log(level, message, function=function, args=args, kwargs=kwargs)
-                result = function(*args, **kwargs)
-                if after:
-                    self.log(level, message)
-                return result
-            new_function.__name__ = function.__name__ + '_traced'
-            new_function.__doc__ = function.__doc__
-            return new_function
-        return _trace_decorator
+        def _trace_it(*args, **kwargs):
+            self.log(Level.TRACE, 'entering %r' % (function, ))
+            result = function(*args, **kwargs)
+            self.log(Level.TRACE, 'exited %r' % (function, ))
+            return result
+        _trace_it.__name__ = function.__name__ + '_trace_it'
+        _trace_it.__doc__ = function.__doc__
+        return _trace_it
+
+
 
     def intercept(self, message='Got an exception', level=Level.ERROR, exception_types=(Exception, )):
         """Intercept exceptions and log a message."""
@@ -235,10 +266,40 @@ class Log(object):
                 try:
                     return function(*args, **kwargs)
                 except exception_types, exception:
-                    self.log(level, message, exc_info=sys.exc_info(),
+                    self.exception(message, level=level, exc_info=sys.exc_info(),
                             function=function, kwargs=kwargs, args=args,
                             append_traceback=True)
                     raise
+
+_root_logger = Log()
+get = _root_logger.get
+basic_config = _root_logger.basic_config
+error = _root_logger.error
+warning = _root_logger.warning
+info = _root_logger.info
+debug = _root_logger.debug
+trace = _root_logger.trace
+trace_it = _root_logger.trace_it
+
+def trace_method(method):
+    """Trace a method"""
+    def trace_method_(self, *args, **kwargs):
+        log = get(self)
+        log.trace('entering %(method)r', method=method)
+        result = method(self, *args, **kwargs)
+        log.trace('exited %(method)r', method=method)
+        return result
+    return trace_method_
+
+def trace_function(function):
+    """Trace a function"""
+    def trace_function_(*args, **kwargs):
+        log = get()
+        log.trace('entering %(function)r', function=function)
+        result = function(*args, **kwargs)
+        log.trace('exited %(function)r', function=function)
+        return result
+    return trace_function_
 
 class Sink(object):
     def __init__(self, level=Level.NOTSET):
@@ -248,7 +309,7 @@ def safesub(s, vals):
     """Try to Substitute vals into s and if any Exception(s) occur, return s"""
     try:
         return s % vals
-    except Exception, some_exception: 
+    except Exception, some_exception:
         return s
 
 class Layout(object):
@@ -259,9 +320,13 @@ class Layout(object):
 class TextLayout(Layout):
     def __init__(self, sep='\t', fields=None):
         if fields is None:
-            fields = [self.layout_time, self.layout_level, self.safe_layout_message]
+            fields = [self.layout_time, self.layout_log, self.layout_level, self.safe_layout_message]
         self.fields = fields
         self.sep = sep
+
+    @classmethod
+    def layout_log(cls, event):
+        return event.logger.path()
 
     @classmethod
     def layout_message(self, event):
@@ -291,33 +356,63 @@ class TextLayout(Layout):
     def layout_level(self, event):
         return Level.labels.get(event.level, unicode(event.level))
 
-    def ___call__(self, event):
-        return self.sep.join(field_function(event) for field_function in self.fields)
+    def __call__(self, event):
+        result = self.sep.join(field_function(event) for field_function in self.fields)
+        return result
+
+
+if json:
+    class FallbackJSONEncoder(json.JSONEncoder):
+        def default(self, obj):
+            return repr(obj)
+else:
+    FallbackJSONEncoder = None
+
+class JSONLayout(object):
+    def __init__(self, encoder=FallbackJSONEncoder()):
+        self.encoder = encoder
+
+    def __call__(self, event):
+
+        tb = traceback.format_exception(*event.exc_info) \
+                if event.exc_info is not None else None
+
+        result = {
+                'time': unicode(event.time),
+                'message': TextLayout.layout_message(event),
+                'args': event.args,
+                'kwargs': event.kwargs, 
+                'level': Level.labels.get(event.level, event.level),
+                'traceback': tb,
+        }
+        return self.encoder.encode(result)
 
 class StreamSink(Sink):
-    def __init__(self, stream=sys.stderr, formatter=None, **kwargs):
+    def __init__(self, stream=sys.stderr, layout=None, **kwargs):
         super(StreamSink, self).__init__(**kwargs)
         self.stream = stream
         self.lock = threading.Lock()
-        self.formatter = formatter if formatter is not None else Formatter()
+        self.layout = layout if layout is not None else TextLayout()
 
     def __call__(self, event):
         if self.level > event.level:
             return
         with self.lock:
-            print >> self.stream, self.formatter(event)
+            self.stream.write(self.layout(event) + "\n")
             self.stream.flush()
 
-_root_logger = Log()
-get = _root_logger.get
-basic_config = _root_logger.basic_config
-error = _root_logger.error
-warning = _root_logger.warning
-info = _root_logger.info
-debug = _root_logger.debug
-trace = _root_logger.trace
+class LogProperty(object):
+    def __init__(self, force_logger=None, parent=None):
+        if force_logger and isinstance(force_logger, basestring):
+            force_logger = get(force_logger)
+        self.force_logger = force_logger
+        self.parent = None
 
-
-
-
-
+    def __get__(self, obj, objtype):
+        if not self.force_logger:
+            if parent:
+                return parent.get(objtype)
+            else:
+                return get(objtype)
+        else:
+            return self.force_logger
