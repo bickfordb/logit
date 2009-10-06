@@ -1,10 +1,10 @@
 import unittest
 
-import log
+import logit
 
 class TestCase(unittest.TestCase):
     def test_get(self):
-        root = log.Log()
+        root = logit.Log()
         red = root.get('red')
         assert red is root.get('red')
         blue = red.get('blue')
@@ -15,15 +15,15 @@ class TestCase(unittest.TestCase):
         assert red.parent() is root
 
     def test_basic(self):
-        tree = log.Log()
+        tree = logit.Log()
         red = tree.get('red')
     
         events = []
         def app(event):
             events.append(event)
         
-        red.handlers.append(app)
-        red.level = log.Level.WARNING
+        red.sinks.append(app)
+        red.level = logit.Level.WARNING
         red.info('hey')
         assert not events
 

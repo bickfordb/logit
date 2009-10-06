@@ -1,12 +1,19 @@
 #!/usr/bin/python
-"""Hierarchical logging system
-"""
+"""Minimal, modern, simple hierarchical logging system"""
 from __future__ import with_statement
 
+__author__ = "Brandon Bickford <bickfordb@gmail.com>"
+__version__ = "1.0"
+__license__ = "LGPL v3.0 or later."
+
 import datetime
+import errno
+import os
 import sys
+import string
 import threading
 import traceback
+import types
 import weakref
 
 try:
@@ -37,12 +44,15 @@ class Level(int):
 
 def obj_type_to_name(object):
     """Convert an object to a logger name"""
-    obj_type = object if isinstance(object, type) else type(object)
-    mod = obj_type.__module__
-    if mod != '__main__':
-        return mod + '.' + obj_type.__name__
+    if isinstance(object, types.ModuleType):
+        return object.__name__
     else:
-        return obj_type.__name__
+        obj_type = object if isinstance(object, type) else type(object)
+        mod = obj_type.__module__
+        if mod != '__main__':
+            return mod + '.' + obj_type.__name__
+        else:
+            return obj_type.__name__
 
 class Event(object):
     """A log event"""
@@ -70,13 +80,13 @@ class Log(object):
     filters -- a list of callables.  If any of the callables returns False when accepting an event, the event will be skipped
     event_type -- the type of Event produced by message logging calls
     """
-    def __init__(self, name=u'', children=None, level=Level.NOTSET, parent=None, filters=(), handlers=(), event_type=Event):
+    def __init__(self, name=u'', children=None, level=Level.NOTSET, parent=None, filters=(), sinks=(), event_type=Event):
         self.children = children if children is not None else {}
         self.level = level
         self._parent = weakref.ref(parent) if parent is not None else None
         self.event_type = event_type
         self.filters = list(filters)
-        self.handlers = list(handlers)
+        self.sinks = list(sinks)
 
         if name is None:
             name = u''
@@ -158,7 +168,12 @@ class Log(object):
         level -- int, a log level see WARN, CRITICAL, ...
 
         """
-        event = self.event_type(logger=self, level=level, message=message, args=args, kwargs=kwargs)
+        try:
+            exc_info = kwargs.pop('exc_info')
+        except KeyError:
+            exc_info = None
+
+        event = self.event_type(logger=self, level=level, message=message, args=args, kwargs=kwargs, exc_info=exc_info)
         self.event(event)
 
     def trace(self, message, *args, **kwargs):
@@ -209,8 +224,8 @@ class Log(object):
                 self.skip(event)
                 return
 
-        for handler in self.handlers:
-            handler(event)
+        for sink in self.sinks:
+            sink(event)
 
         parent = self.parent()
         if parent is not None:
@@ -231,9 +246,9 @@ class Log(object):
         if filename is not None:
             stream = open(filename, file_mode)
 
-        handler = StreamSink(stream=stream, layout=TextLayout(fields=layout_fields, sep=layout_sep))
+        sink = StreamSink(stream=stream, layout=TextLayout(fields=layout_fields, sep=layout_sep))
 
-        self.handlers = [handler]
+        self.sinks = [sink]
         self.level = level
 
     def trace_it(self, function):
@@ -381,7 +396,7 @@ class JSONLayout(object):
                 'time': unicode(event.time),
                 'message': TextLayout.layout_message(event),
                 'args': event.args,
-                'kwargs': event.kwargs, 
+                'kwargs': event.kwargs,
                 'level': Level.labels.get(event.level, event.level),
                 'traceback': tb,
         }
@@ -416,3 +431,58 @@ class LogProperty(object):
                 return get(objtype)
         else:
             return self.force_logger
+
+
+class RotateByTimeSink(StreamSink):
+    """Rotate a log by time
+    
+    This will defer setup until messages are actually sent.
+
+    Usage:
+    import log
+
+    sink = log.RotateByTimeSink('/var/logs/myservice-%Y%m%d-%H0000.log')
+    log.get().sinks.append(sink)
+
+    Arguments
+    base_path -- string, a path formattable with strftime
+    make_dirs -- bool, try to create a subdirectory whenever we switch to a new log
+    """
+    def __init__(self, base_path, make_dirs=True, **kwargs):
+        self.base_path = base_path
+        self.curr_path = None
+        self.make_dirs = make_dirs
+        super(RotateByTimeSink, self).__init__(stream=None, **kwargs)
+
+    def safe_mkdir(self, directory):
+        """Try to make a directory and ignore file exists errors."""
+        try:
+            os.makedirs(directory)
+        except OSError, error:
+            if error.errno != errno.EEXIST:
+                raise
+
+    @property
+    def path(self):
+        """Get the current path for this logging.
+
+        When this changes, the log will rotate to this new path.
+        """
+        return datetime.datetime.now().strftime(self.base_path)
+
+    def check_rotate(self):
+        """Check to see if rotation is necessary, and if so, reset the stream."""
+        if self.path != self.curr_path:
+            with self.lock:
+                self.curr_path = self.path
+                if self.stream is not None:
+                    self.stream.close()
+                    self.stream = None
+                if self.make_dirs:
+                    self.safe_mkdir(os.path.dirname(self.curr_path))
+                self.stream = open(self.curr_path, 'a')
+
+    def __call__(self, event):
+        self.check_rotate()
+        super(RotateByTimeSink, self).__call__(event)
+
