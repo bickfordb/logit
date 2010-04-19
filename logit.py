@@ -1,13 +1,24 @@
 #!/usr/bin/python
-"""Minimal, modern, simple hierarchical logging system"""
+"""Minimal, simple hierarchical logging system
+
+Example:
+
+    import logit
+
+    logit.log.info("something")
+
+    logit.log.my.website.somecontroller.info("bad user access")
+
+"""
 from __future__ import with_statement
 
 __author__ = "Brandon Bickford <bickfordb@gmail.com>"
 __version__ = "1.0"
-__license__ = "LGPL v3.0 or later."
+__license__ = "LGPL v3 later."
 
 import datetime
 import errno
+import functools
 import os
 import sys
 import string
@@ -19,10 +30,7 @@ import weakref
 try:
     import json
 except ImportError:
-    try:
-        import simplejson as json
-    except ImportError:
-        json = None
+    json = None
 
 class Level(int):
     """Log levels"""
@@ -42,18 +50,6 @@ class Level(int):
             WARNING: u'WARNING',
     }
 
-def obj_type_to_name(object):
-    """Convert an object to a logger name"""
-    if isinstance(object, types.ModuleType):
-        return object.__name__
-    else:
-        obj_type = object if isinstance(object, type) else type(object)
-        mod = obj_type.__module__
-        if mod != '__main__':
-            return mod + '.' + obj_type.__name__
-        else:
-            return obj_type.__name__
-
 class Event(object):
     """A log event"""
     def __init__(self, logger=None, level=Level.NOTSET, message=u'', args=(), kwargs=None, exc_info=None, time=None):
@@ -70,9 +66,9 @@ class Event(object):
                 (self.__class__.__name__, self.logger, self.level, self.message, self.args, self.kwargs, self.time)
 
 class Log(object):
-    """A logger is something which logs messages and events.
+    """Log messages and events
 
-    Contructor arguments:
+    Contructor arguments
     name -- string, the name of the logger
     children -- None or a dictionary, name to logger mapping of child loggers
     level -- Level.X, the minimum logging level for this logger
@@ -87,18 +83,22 @@ class Log(object):
         self.event_type = event_type
         self.filters = list(filters)
         self.sinks = list(sinks)
-
-        if name is None:
-            name = u''
-        elif isinstance(name, str):
-            try:
-                name = name.decode('utf-8')
-            except UnicodeDecodeError, decoding_error:
-                name = name.decode('latin-1')
         self.name = name
 
     def __repr__(self):
-        return u"<log.Log(name=%r, level=%r) at 0x%X>" % (self.path(), self.level, id(self))
+        return u'Log(name=%(name)r, children=%(children)r, level=%(level)r, parent=<>, filters=%(filters)r, sinks=%(sinks)r, event_type=%(event_type)r)' % vars(self)
+
+    def __getattr__(self, logger_name): 
+        logger = self.get(logger_name)
+        if logger is None:
+            raise AttributeError
+        return logger
+
+    def __getitem__(self, logger_name):
+        sub_logger = self.get(logger_name)
+        if sub_logger is None:
+            raise KeyError
+        return sub_logger
 
     def parent(self):
         """Get the parent logger"""
@@ -131,35 +131,25 @@ class Log(object):
             names.append(ancestor.name)
         return u'.'.join(reversed(filter(None, names)))
 
-    def get(self, name_or_obj=None):
-        if name_or_obj is None or name_or_obj == '':
+    def get(self, name=None):
+        if not name:
             return self
-        if not isinstance(name_or_obj, basestring):
-            name = obj_type_to_name(name_or_obj)
+        name = unicode(name)
+        if '.' in name:
+            parts = name.split('.')
+            tail = parts[1:]
+            name = parts[0]
         else:
-            name = name_or_obj
-
-        rest = name.strip()
-        head = ''
-        while rest:
-            parts = rest.split('.', 1)
-            if len(parts) == 1:
-                head = parts[0]
-                rest = ''
-                head = head.strip()
-            else:
-                head, rest = parts
-            if head:
-                break
-
-        if not head:
-            return self
+            tail = ()
 
         try:
-            logger = self.children[head]
+            logger = self.children[name]
         except KeyError:
-            logger = self.children[head] = type(self)(head, parent=self)
-        return logger.get(rest) if rest else logger
+            logger = Log(name, parent=self)
+            self.children[name] = logger
+
+        logger = reduce(lambda x, right: x.get(right), tail, logger)
+        return logger
 
     def log(self, level, message, *args, **kwargs):
         """Log a message
@@ -251,29 +241,6 @@ class Log(object):
         self.sinks = [sink]
         self.level = level
 
-    def trace_it(self, function):
-        """Trace a function
-
-        Example usage:
-
-        dogs/spaniel.py:
-
-        _log = log.get("dogs.spaniel")
-        @_log.trace_it
-        def bark():
-            ....
-        """
-        def _trace_it(*args, **kwargs):
-            self.log(Level.TRACE, 'entering %r' % (function, ))
-            result = function(*args, **kwargs)
-            self.log(Level.TRACE, 'exited %r' % (function, ))
-            return result
-        _trace_it.__name__ = function.__name__ + '_trace_it'
-        _trace_it.__doc__ = function.__doc__
-        return _trace_it
-
-
-
     def intercept(self, message='Got an exception', level=Level.ERROR, exception_types=(Exception, )):
         """Intercept exceptions and log a message."""
         def _catch_it(function):
@@ -286,35 +253,27 @@ class Log(object):
                             append_traceback=True)
                     raise
 
-_root_logger = Log()
-get = _root_logger.get
-basic_config = _root_logger.basic_config
-error = _root_logger.error
-warning = _root_logger.warning
-info = _root_logger.info
-debug = _root_logger.debug
-trace = _root_logger.trace
-trace_it = _root_logger.trace_it
+    def trace_method(method):
+        """Trace a method"""
+        def trace_method_(self, *args, **kwargs):
+            log = get(self)
+            log.trace('entering %(method)r', method=method)
+            result = method(self, *args, **kwargs)
+            log.trace('exited %(method)r', method=method)
+            return result
+        functools.update_wrapper(trace_method_, trace_method)
+        return trace_method_
 
-def trace_method(method):
-    """Trace a method"""
-    def trace_method_(self, *args, **kwargs):
-        log = get(self)
-        log.trace('entering %(method)r', method=method)
-        result = method(self, *args, **kwargs)
-        log.trace('exited %(method)r', method=method)
-        return result
-    return trace_method_
-
-def trace_function(function):
-    """Trace a function"""
-    def trace_function_(*args, **kwargs):
-        log = get()
-        log.trace('entering %(function)r', function=function)
-        result = function(*args, **kwargs)
-        log.trace('exited %(function)r', function=function)
-        return result
-    return trace_function_
+    def trace_function(function):
+        """Trace a function"""
+        def trace_function_(*args, **kwargs):
+            log = get()
+            log.trace('entering %(function)r', function=function)
+            result = function(*args, **kwargs)
+            log.trace('exited %(function)r', function=function)
+            return result
+        functools.update_wrapper(trace_function_, trace_function)
+        return trace_function_
 
 class Sink(object):
     def __init__(self, level=Level.NOTSET):
@@ -485,4 +444,7 @@ class RotateByTimeSink(StreamSink):
     def __call__(self, event):
         self.check_rotate()
         super(RotateByTimeSink, self).__call__(event)
+
+# The root log
+log = Log()
 
