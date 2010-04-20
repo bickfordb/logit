@@ -1,10 +1,13 @@
 import time
-
-import examplelib
 import logit
 
+import examplelib
+
+log = logit.log.examplemain
+
 class FizBuzz(object):
-    @logit.trace_method
+
+    @log.trace_method
     def x(self):
         pass
 
@@ -13,11 +16,11 @@ if __name__ == '__main__':
 
     # Setup a rotating text log for all of examplelib.Widget's messages
     filesink = logit.RotateByTimeSink('logs/%Y/%m/%d/foo.log')
-    logit.get(examplelib.Widget).sinks.append(filesink)
+    examplelib.log.Widget.sinks.append(filesink)
 
     # Setup a JSON Stream:
     json_sink = logit.StreamSink(layout=logit.JSONLayout())
-    logit.get(examplelib).sinks.append(json_sink)
+    examplelib.log.sinks.append(json_sink)
 
     # Print out some trace messages to stderr
     a = FizBuzz()

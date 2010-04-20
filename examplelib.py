@@ -1,8 +1,12 @@
 import logit
 
+log = logit.log.examplelib
+
 def bar():
-    logit.get(__name__).info('hey!')
+    log.bar.info('hey!')
 
 class Widget(object):
+    log = log.Widget
+
     def foo(self):
-        logit.get(Widget).info('hello!')
+        self.log.info('hello!')

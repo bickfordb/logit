@@ -253,27 +253,34 @@ class Log(object):
                             append_traceback=True)
                     raise
 
-    def trace_method(method):
+    def trace_method(self, method):
         """Trace a method"""
-        def trace_method_(self, *args, **kwargs):
-            log = get(self)
-            log.trace('entering %(method)r', method=method)
-            result = method(self, *args, **kwargs)
-            log.trace('exited %(method)r', method=method)
+        def wrapped_method(self_, *args, **kwargs):
+            self.trace('entering %(method)r', object=self_, method=method)
+            result = method(self_, *args, **kwargs)
+            self.trace('exited %(method)r', method=method)
             return result
-        functools.update_wrapper(trace_method_, trace_method)
-        return trace_method_
+        functools.update_wrapper(wrapped_method, method)
+        return wrapped_method
 
-    def trace_function(function):
+    def trace_function(self, function):
         """Trace a function"""
-        def trace_function_(*args, **kwargs):
+        def wrapped_function(*args, **kwargs):
             log = get()
             log.trace('entering %(function)r', function=function)
             result = function(*args, **kwargs)
             log.trace('exited %(function)r', function=function)
             return result
-        functools.update_wrapper(trace_function_, trace_function)
-        return trace_function_
+        functools.update_wrapper(wrapped_function, trace_function)
+        return wrapped_function
+
+
+    # Logging module compatibility:
+    warn = warning
+
+    critical = error
+    fatal = error
+
 
 class Sink(object):
     def __init__(self, level=Level.NOTSET):
@@ -447,4 +454,19 @@ class RotateByTimeSink(StreamSink):
 
 # The root log
 log = Log()
+
+basic_config = log.basic_config
+
+info = log.info
+error = log.error
+warning = log.warning
+trace = log.trace
+debug = log.debug
+get = log.get
+
+# For logging module compatibility:
+getLogger = get
+critical = fatal = error
+warn = warning
+
 

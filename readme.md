@@ -1,38 +1,44 @@
-A more modern logging library for Python
-=================================
+# A simple logging library for Python
 
 Differences between the Python logging API:
 
- * Logging system will never call sys.exit
- * Less camel case
+ * logit system will never call *sys.exit*
+ * No camel case
  * No silent message dropping (let the program crash if there are bugs)
  * Decorator and contextmanager helpers
  * Attempt to be light and straightforward in every way
- * Slightly nicer API: "logit.get(planets.Mercury)" instead of "logging.getLogger('planets.mercury')"
+ * Sink and filter types are plain functions
+ * Nicer looking API: `logit.log.planets.mercury` instead of `logging.getLogger('planets.mercury')`
 
 Basic Usage:
 
-examplelib.py: 
----
+*examplelib.py*
+
     import logit
+
+    log = logit.log.examplelib
 
     def bar():
-        logit.get(__name__).info('hey!')
+        log.bar.info('hey!')
 
     class Widget(object):
+        log = log.Widget
+
         def foo(self):
-            logit.get(Widget).info('hello!')
+            self.log.info('hello!')
 
+*examplemain.py*
 
-examplemain.py:
----
     import time
-
-    import examplelib
     import logit
 
+    import examplelib
+
+    log = logit.log.examplemain
+
     class FizBuzz(object):
-        @logit.trace_method
+
+        @log.trace_method
         def x(self):
             pass
 
@@ -41,11 +47,11 @@ examplemain.py:
 
         # Setup a rotating text log for all of examplelib.Widget's messages
         filesink = logit.RotateByTimeSink('logs/%Y/%m/%d/foo.log')
-        logit.get(examplelib.Widget).sinks.append(filesink)
+        examplelib.log.Widget.sinks.append(filesink)
 
         # Setup a JSON Stream:
         json_sink = logit.StreamSink(layout=logit.JSONLayout())
-        logit.get(examplelib).sinks.append(json_sink)
+        examplelib.log.sinks.append(json_sink)
 
         # Print out some trace messages to stderr
         a = FizBuzz()
