@@ -70,14 +70,14 @@ Differences between the Python logging API:
 
 import logging
 
-def some_function():
-    logging.getLogger('abc').info('stuff!')
+    def some_function():
+        logging.getLogger('abc').info('stuff!')
 
 
 *newcode.py*
 
-# import logging
-import logit as logging
+    # import logging
+    import logit as logging
 
-def some_function():
-    logging.getLogger('abc').info('stuff!')
+    def some_function():
+        logging.getLogger('abc').info('stuff!')
