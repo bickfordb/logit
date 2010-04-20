@@ -10,7 +10,7 @@ Differences between the Python logging API:
  * Sink and filter types are plain functions
  * Nicer looking API: `logit.log.planets.mercury` instead of `logging.getLogger('planets.mercury')`
 
-Basic Usage:
+## Basic Usage
 
 *examplelib.py*
 
@@ -63,3 +63,21 @@ Basic Usage:
         examplelib.bar()
         logit.error('hello')
         examplelib.Widget().foo()
+
+## Transitioning from the logging module
+
+*oldcode.py*
+
+import logging
+
+def some_function():
+    logging.getLogger('abc').info('stuff!')
+
+
+*newcode.py*
+
+# import logging
+import logit as logging
+
+def some_function():
+    logging.getLogger('abc').info('stuff!')
